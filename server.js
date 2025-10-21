@@ -7,10 +7,13 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// PostgreSQL डेटाबेस से कनेक्शन (सही तरीका)
+// PostgreSQL डेटाबेस से कनेक्शन (कनेक्शन पूल फिक्स के साथ)
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL, // सुनिश्चित करें कि process.env से ही पढ़ें
-  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
+  // --- कनेक्शन पूल को स्थिर रखने के लिए सेटिंग्स ---
+  idleTimeoutMillis: 30000,      // 30 सेकंड में निष्क्रिय कनेक्शन को बंद करें
+  connectionTimeoutMillis: 20000, // कनेक्शन के लिए 20 सेकंड तक प्रतीक्षा करें
 });
 
 // सर्वर को JSON और CORS उपयोग करने के लिए कॉन्फ़िगर करें
@@ -84,13 +87,11 @@ app.post('/api/device/register', async (req, res) => {
     const existingDevice = await pool.query('SELECT id FROM devices WHERE device_id = $1', [device_id]);
     
     if (existingDevice.rows.length > 0) {
-      // डिवाइस पहले से है, तो सिर्फ last_seen और अन्य जानकारी अपडेट करें
       await pool.query(
         'UPDATE devices SET device_name = $1, os_version = $2, battery_level = $3, phone_number = $4, last_seen = NOW() WHERE device_id = $5',
         [device_name, os_version, battery_level, phone_number, device_id]
       );
     } else {
-      // नया डिवाइस है, तो सभी जानकारी के साथ बनाएं (created_at और last_seen दोनों सेट करें)
       await pool.query(
         'INSERT INTO devices (device_id, device_name, os_version, battery_level, phone_number, last_seen, created_at) VALUES ($1, $2, $3, $4, $5, NOW(), NOW())',
         [device_id, device_name, os_version, battery_level, phone_number]
@@ -283,8 +284,9 @@ app.listen(PORT, async () => {
     await pool.query('SELECT NOW()'); // डेटाबेस कनेक्शन की जांच करें
     console.log('Database connected successfully.');
     await initializeDatabase(); // टेबल और डेमो डिवाइस बनाने वाला फंक्शन कॉल करें
-    console.log(`Server is running on http://localhost:${PORT}`);
+    console.log(`Server is running on port ${PORT}`);
   } catch (err) {
     console.error('Failed to start server:', err);
   }
 });
+  
