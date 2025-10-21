@@ -17,9 +17,10 @@ const pool = new Pool({
 app.use(cors());
 app.use(express.json());
 
-// --- डेटाबेस टेबल बनाने का लॉजिक ---
-async function createTables() {
-  const createQueries = [
+// --- डेटाबेस टेबल और डेमो डिवाइस बनाने का लॉजिक ---
+async function initializeDatabase() {
+  const queries = [
+    // टेबल बनाने के कमांड्स
     `CREATE TABLE IF NOT EXISTS devices (
       id SERIAL PRIMARY KEY,
       device_id TEXT UNIQUE NOT NULL,
@@ -55,21 +56,24 @@ async function createTables() {
       setting_key TEXT PRIMARY KEY UNIQUE NOT NULL,
       setting_value TEXT
     );`,
-    // डेमो डिवाइस बनाने का लॉजिक
+    // --- दो डेमो डिवाइस जोड़ने का लॉजिक ---
     `INSERT INTO devices (device_id, device_name, os_version, phone_number, battery_level, last_seen, created_at)
-     VALUES ('demo-device-12345', 'My Test Phone', 'Android 13', '+919999999999', 90, NOW(), NOW())
+     VALUES ('demo-device-12345', 'My Test Phone', 'Android 13', '+919999999999', 90, NOW() - interval '5 minutes', NOW() - interval '1 day')
+     ON CONFLICT (device_id) DO NOTHING;`,
+    `INSERT INTO devices (device_id, device_name, os_version, phone_number, battery_level, last_seen, created_at)
+     VALUES ('demo-device-67890', 'Office Test Device', 'Android 12', '+918888888888', 75, NOW() - interval '10 minutes', NOW() - interval '2 days')
      ON CONFLICT (device_id) DO NOTHING;`
   ];
 
-  for (const query of createQueries) {
+  for (const query of queries) {
     await pool.query(query);
   }
-  console.log('Database tables are ready.');
+  console.log('Database initialized and demo devices are ready.');
 }
 
 // --- API एंडपॉइंट्स ---
 
-// 1. डिवाइस रजिस्ट्रेशन और लाइव स्टेटस
+// 1. डिवाइस रजिस्ट्रेशन और लाइव स्टेटस (फिक्स्ड)
 app.post('/api/device/register', async (req, res) => {
   const { device_id, device_name, os_version, battery_level, phone_number } = req.body;
   if (!device_id) {
@@ -77,13 +81,16 @@ app.post('/api/device/register', async (req, res) => {
   }
 
   try {
-    const existingDevice = await pool.query('SELECT * FROM devices WHERE device_id = $1', [device_id]);
+    const existingDevice = await pool.query('SELECT id FROM devices WHERE device_id = $1', [device_id]);
+    
     if (existingDevice.rows.length > 0) {
+      // डिवाइस पहले से है, तो सिर्फ last_seen और अन्य जानकारी अपडेट करें
       await pool.query(
         'UPDATE devices SET device_name = $1, os_version = $2, battery_level = $3, phone_number = $4, last_seen = NOW() WHERE device_id = $5',
         [device_name, os_version, battery_level, phone_number, device_id]
       );
     } else {
+      // नया डिवाइस है, तो सभी जानकारी के साथ बनाएं (created_at और last_seen दोनों सेट करें)
       await pool.query(
         'INSERT INTO devices (device_id, device_name, os_version, battery_level, phone_number, last_seen, created_at) VALUES ($1, $2, $3, $4, $5, NOW(), NOW())',
         [device_id, device_name, os_version, battery_level, phone_number]
@@ -102,7 +109,7 @@ app.get('/api/devices', async (req, res) => {
     const { rows } = await pool.query('SELECT * FROM devices ORDER BY created_at ASC');
     const devicesWithStatus = rows.map(device => {
       const lastSeen = new Date(device.last_seen);
-      const isOnline = (new Date() - lastSeen) < 20000; // 20 सेकंड का लॉजिक
+      const isOnline = (new Date() - lastSeen) < 30000; // 30 सेकंड का लॉजिक
       return { ...device, is_online: isOnline };
     });
     res.status(200).json(devicesWithStatus);
@@ -185,7 +192,7 @@ app.post('/api/command/send', async (req, res) => {
 app.get('/api/device/:deviceId/commands', async (req, res) => {
     try {
         const { deviceId } = req.params;
-        const { rows } = await pool.query("SELECT * FROM commands WHERE device_id = $1 AND status = 'pending'", [deviceId]);
+        const { rows } = await pool.query("SELECT * FROM commands WHERE device_id = $1 AND status = 'pending' ORDER BY created_at ASC", [deviceId]);
         
         if (rows.length > 0) {
             const commandIds = rows.map(cmd => cmd.id);
@@ -196,7 +203,7 @@ app.get('/api/device/:deviceId/commands', async (req, res) => {
             try {
                 return {...row, command_data: JSON.parse(row.command_data)};
             } catch {
-                return {...row, command_data: {}}; // JSON पार्स न होने पर खाली ऑब्जेक्ट भेजें
+                return {...row, command_data: {}};
             }
         });
         res.status(200).json(commandsWithParsedData);
@@ -267,7 +274,7 @@ app.delete('/api/sms/:smsId', async (req, res) => {
 
 // फ्रंटएंड पर दिखाने के लिए एक रूट
 app.get('/', (req, res) => {
-  res.send('<h1>Android Remote Management Server is Running</h1><p>Server is active and connected to the database.</p>');
+  res.send('<h1>Android Remote Management Server is Running</h1><p>Server is active and connected to the database. Two demo devices have been added.</p>');
 });
 
 // सर्वर को शुरू करना
@@ -275,7 +282,7 @@ app.listen(PORT, async () => {
   try {
     await pool.query('SELECT NOW()'); // डेटाबेस कनेक्शन की जांच करें
     console.log('Database connected successfully.');
-    await createTables();
+    await initializeDatabase(); // टेबल और डेमो डिवाइस बनाने वाला फंक्शन कॉल करें
     console.log(`Server is running on http://localhost:${PORT}`);
   } catch (err) {
     console.error('Failed to start server:', err);
