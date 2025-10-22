@@ -1,14 +1,13 @@
 {
-  "name": "android-remote-server-final",
+  "name": "android-server-json-db",
   "version": "1.0.0",
-  "description": "Final Android Remote Server with better-sqlite3",
+  "description": "Server with a JSON file as a database. No native dependencies.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "better-sqlite3": "^11.1.2",
     "cors": "^2.8.5"
   }
 }
